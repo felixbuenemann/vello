@@ -114,6 +114,9 @@ pub enum PixelFormat {
     Rgba8,
 }
 
+/// Required alignment for the start of [`RasterizerSettings::scene_rows`].
+pub const SCENE_ROW_ALIGNMENT: u16 = vello_common::tile::Tile::HEIGHT;
+
 /// Settings used when rasterizing a scene into a pixmap.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct RasterizerSettings {
@@ -135,6 +138,43 @@ pub struct RasterizerSettings {
     ///
     /// See [`RenderContext::render_with`] for more information.
     pub offset: (u16, u16),
+    /// Half-open range of scene rows to rasterize, or `None` for the whole scene.
+    ///
+    /// Rasterizing `y0..y1` writes those scene rows starting at
+    /// [`RasterizerSettings::offset`] in the destination, letting a scene be
+    /// rasterized one horizontal band at a time into a band-sized pixmap
+    /// without re-recording it. Both bounds are snapped outwards to the
+    /// rasterizer's tile height.
+    ///
+    /// [`RasterizerSettings::offset`] is unsigned and so can only push a scene
+    /// down and to the right; this is how rows further down a tall scene are
+    /// reached.
+    ///
+    /// The start must be a multiple of [`SCENE_ROW_ALIGNMENT`], since
+    /// rasterization works in strips of that height; the end is snapped
+    /// outwards for you. Stitching bands whose starts are not aligned would
+    /// silently shift the output, so this is checked in debug builds.
+    pub scene_rows: Option<(u16, u16)>,
+}
+
+impl RasterizerSettings {
+    /// The scene rows this will rasterize, snapped outwards to the tile grid
+    /// and clamped to `scene_height`.
+    pub(crate) fn scene_row_bounds(self, scene_height: u16) -> (u16, u16) {
+        use vello_common::tile::Tile;
+
+        let Some((y0, y1)) = self.scene_rows else {
+            return (0, scene_height);
+        };
+        debug_assert_eq!(
+            y0 % SCENE_ROW_ALIGNMENT,
+            0,
+            "`scene_rows` must start on a multiple of {SCENE_ROW_ALIGNMENT}"
+        );
+        let y0 = (y0 / Tile::HEIGHT) * Tile::HEIGHT;
+        let y1 = y1.next_multiple_of(Tile::HEIGHT).min(scene_height);
+        (y0.min(y1), y1)
+    }
 }
 
 impl Default for RasterizerSettings {
@@ -144,6 +184,7 @@ impl Default for RasterizerSettings {
             composite_mode: CompositeMode::Replace,
             pixel_format: PixelFormat::Rgba8,
             offset: (0, 0),
+            scene_rows: None,
         }
     }
 }
@@ -1312,5 +1353,54 @@ mod tests {
             .fill_glyphs(glyphs.into_iter());
 
         assert!(resources.glyph_resources.is_some());
+    }
+
+    #[test]
+    fn scene_rows_bands_match_a_full_rasterization() {
+        use vello_common::kurbo::Affine;
+
+        const W: u16 = 64;
+        const H: u16 = 64;
+
+        let mut ctx = RenderContext::new(W, H);
+        // Content that straddles band boundaries in both directions.
+        ctx.set_paint(RED);
+        ctx.fill_path(&Rect::new(4.0, 2.0, 60.0, 33.0).to_path(0.1));
+        ctx.set_transform(Affine::rotate(0.4));
+        ctx.set_paint(BLUE);
+        ctx.fill_path(&Rect::new(10.0, 10.0, 50.0, 55.0).to_path(0.1));
+        ctx.reset_transform();
+        ctx.flush();
+
+        let mut resources = Resources::new();
+        let mut full = Pixmap::new(W, H);
+        ctx.render(&mut full, &mut resources);
+
+        for band in [4_u16, 8, 16, 20] {
+            let mut stitched = Pixmap::new(W, H);
+            let mut y = 0;
+            while y < H {
+                let rows = band.min(H - y);
+                let mut strip = Pixmap::new(W, rows);
+                ctx.render_with(
+                    &mut strip,
+                    &mut resources,
+                    RasterizerSettings {
+                        scene_rows: Some((y, y + rows)),
+                        ..Default::default()
+                    },
+                );
+                let stride = usize::from(W);
+                let dst = usize::from(y) * stride;
+                let len = usize::from(rows) * stride;
+                stitched.data_mut()[dst..dst + len].copy_from_slice(&strip.data()[..len]);
+                y += rows;
+            }
+            assert_eq!(
+                full.data(),
+                stitched.data(),
+                "banded rasterization at {band} rows differs from a full render"
+            );
+        }
     }
 }
