@@ -188,7 +188,8 @@ pub mod region;
 pub mod span;
 
 pub use render::{
-    PixelFormat, RasterizerSettings, RenderContext, RenderSettings, Resources, TargetInit,
+    PixelFormat, RasterizerSettings, RenderContext, RenderSettings, Resources, SCENE_ROW_ALIGNMENT,
+    TargetInit,
 };
 // Note: The first one is not something that should be
 // exposed, but is currently needed by vello_tests.
