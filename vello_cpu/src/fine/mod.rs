@@ -467,6 +467,8 @@ pub(crate) fn rasterize_region<S: Simd, T: FineKernel<S>>(
     let span = region.span().tile_aligned();
 
     fine.set_row_y(scene_y);
+    // Masks cover the whole scene, so they are sampled at the viewport's position in it.
+    fine.set_paint_offset(bucketer.viewport_origin());
     fine.buffer_span = span;
     depth.clear();
 
@@ -794,8 +796,10 @@ impl<S: Simd, T: FineKernel<S>> Fine<S, T> {
         let width = span.pixel_width();
         let target = self.blend_buffers.last_mut().unwrap();
         let target = &mut target[Self::scratch_range(span)];
-        let y = u32::from(row_y) + u32x4::from_slice(self.simd, &[0, 1, 2, 3]);
-        let iter = (x..x.saturating_add(width)).map(|x| {
+        let y = u32::from(row_y.saturating_add(self.origin.1))
+            + u32x4::from_slice(self.simd, &[0, 1, 2, 3]);
+        let mask_x = x.saturating_add(self.origin.0);
+        let iter = (mask_x..mask_x.saturating_add(width)).map(|x| {
             let x_in_range = x < mask.width();
 
             macro_rules! sample {
@@ -916,8 +920,8 @@ impl<S: Simd, T: FineKernel<S>> Fine<S, T> {
         T::blend(
             simd,
             &mut scratch[Self::scratch_range(span)],
-            x,
-            self.row_y,
+            x.saturating_add(self.origin.0),
+            self.row_y.saturating_add(self.origin.1),
             iter::repeat(color),
             attrs.blend_mode,
             alphas,
@@ -988,8 +992,8 @@ impl<S: Simd, T: FineKernel<S>> Fine<S, T> {
                         T::blend(
                             simd,
                             dest,
-                            x,
-                            y,
+                            sample_x,
+                            sample_y,
                             color_buf
                                 .chunks_exact(T::Composite::LENGTH)
                                 .map(|s| T::Composite::from_slice(simd, s)),

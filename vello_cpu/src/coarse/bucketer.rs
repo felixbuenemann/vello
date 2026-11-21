@@ -232,7 +232,7 @@ impl CommandBucketer {
         self.clip_bboxes[0].width()
     }
 
-    fn viewport_origin(&self) -> (u16, u16) {
+    pub(crate) fn viewport_origin(&self) -> (u16, u16) {
         (self.viewport.x0, self.viewport.y0)
     }
 

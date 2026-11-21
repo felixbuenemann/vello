@@ -1540,6 +1540,39 @@ mod tests {
         });
     }
 
+    #[test]
+    fn scene_rows_bands_sample_masks_in_scene_coordinates() {
+        const W: u16 = 16;
+        const H: u16 = 32;
+
+        let alphas = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (y * 8 + x) as u8))
+            .collect();
+        let mut ctx = RenderContext::new(W, H);
+        ctx.set_mask(vello_common::mask::Mask::from_parts(alphas, W, H));
+        ctx.set_paint(RED);
+        ctx.fill_rect(&Rect::new(0.0, 0.0, f64::from(W), f64::from(H)));
+        ctx.flush();
+
+        let mut resources = Resources::new();
+        let mut full = Pixmap::new(W, H);
+        ctx.render(&mut full, &mut resources);
+
+        for y in (0..H).step_by(8) {
+            let mut band = Pixmap::new(W, 8);
+            ctx.render_with(
+                &mut band,
+                &mut resources,
+                RasterizerSettings {
+                    scene_rows: Some((y, y + 8)),
+                    ..Default::default()
+                },
+            );
+            let start = usize::from(y) * usize::from(W);
+            assert_eq!(band.data(), &full.data()[start..start + band.data().len()]);
+        }
+    }
+
     fn scene_rows_bands_match(render_settings: crate::RenderSettings) {
         const W: u16 = 64;
         const H: u16 = 64;
